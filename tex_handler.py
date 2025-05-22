@@ -316,7 +316,7 @@ def save_tex_to_data(base_tex_info: TexFile, output_image: Image.Image, export_f
 
     try:
         aclios_block_wh, aclios_bytes_per_block = get_aclios_format_params(new_tex_format_id)
-        aclios_swizzle_mode = 1 # Match mode used for deswizzle testing
+        aclios_swizzle_mode = 4
 
         tile_width_pixels = (64 // aclios_bytes_per_block) * aclios_block_wh[0]
         tile_height_pixels = 8 * aclios_block_wh[1] * (2 ** aclios_swizzle_mode)
