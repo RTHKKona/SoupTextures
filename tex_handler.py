@@ -286,10 +286,13 @@ def is_dxt_format_from_id(mtf_format_id: int, version: int = C.MHGU_VERSION) -> 
 
 def save_tex_to_data(base_tex_info: TexFile, output_image: Image.Image, export_format_str: str) -> Optional[bytes]:
     if not output_image: return None
-    if base_tex_info.version != C.MHGU_VERSION:
-        print("TEX_HANDLER_ERROR: Save only supports MHGU (V160).")
-        return None
-
+    # Use the original version from base_tex_info if it's set by the main_gui logic.
+    # The main_gui will explicitly set base_tex_info.version = C.MHGU_VERSION
+    # for all exports, so this check primarily serves as a warning if somehow a different
+    # version was passed down.
+    if base_tex_info.version != C.MHGU_VERSION: 
+        print(f"TEX_HANDLER_WARNING: Exporting with version {base_tex_info.version} instead of MHGU_VERSION {C.MHGU_VERSION}. Results may vary.")
+        
     new_tex_format_id = get_mtf_format_id_from_string_kukkii_switch(export_format_str) # MODIFIED Call
     if new_tex_format_id is None:
         print(f"TEX_HANDLER_ERROR: Unsupported export format '{export_format_str}' for MHGU.")
@@ -316,7 +319,7 @@ def save_tex_to_data(base_tex_info: TexFile, output_image: Image.Image, export_f
 
     try:
         aclios_block_wh, aclios_bytes_per_block = get_aclios_format_params(new_tex_format_id)
-        aclios_swizzle_mode = 4
+        aclios_swizzle_mode = 4 # Corrected: Match mode used for deswizzle
 
         tile_width_pixels = (64 // aclios_bytes_per_block) * aclios_block_wh[0]
         tile_height_pixels = 8 * aclios_block_wh[1] * (2 ** aclios_swizzle_mode)
@@ -352,7 +355,8 @@ def save_tex_to_data(base_tex_info: TexFile, output_image: Image.Image, export_f
 
     out_bs_buffer.write(struct.pack(endian_prefix + "I", output_magic))
 
-    val1 = ( (C.MHGU_VERSION & 0xFFF) | 
+    # Corrected: Use base_tex_info.version directly (which is set by main_gui to C.MHGU_VERSION)
+    val1 = ( (base_tex_info.version & 0xFFF) | 
              ((base_tex_info.k_unk1 & 0xFFF) << 12) |
              ((base_tex_info.k_unused1 & 0xF) << 24) |
              ((base_tex_info.alpha_flags & 0xF) << 28) )

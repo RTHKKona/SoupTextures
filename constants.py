@@ -27,8 +27,8 @@ STATUS_INFO_FG = TEXT_COLOR
 STATUS_DEBUG_FG = '#999999'
 
 # TEX Magic Numbers
-MAGIC_TEX_LITTLE = 5784916  # TEX\0
-MAGIC_TEX_BIG = 1413830656  # \0XET
+MAGIC_TEX_LITTLE = 5784916  # TEX\0 (Little Endian)
+MAGIC_TEX_BIG = 1413830656  # \0XET (Big Endian)
 MAGIC_TEX_MOBILE = 542655828 # TEX (space)
 
 # Noesis Constants (for reference, may need to adapt)

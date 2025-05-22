@@ -1,0 +1,1 @@
+pyinstaller --name "SoupTextures" --onefile --windowed --icon="soup.ico" --add-binary "texconv.exe:." --clean main_gui.py
