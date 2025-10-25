@@ -45,6 +45,7 @@ FOURCC_BC7  = 0x374342   # "BC7 " (reverse for int) -> 0x20374342
 
 # MHGU (Switch) Specifics
 MHGU_VERSION = 160
+FILE_EXT= ".tex"
 # Common MHGU Formats (from Noesis script for Version 160)
 # Format 7: RGBA8888 (b8g8r8a8 in Noesis, check byte order) -> Actually BGRA for Switch typically
 # Format 19: DXT1/BC1

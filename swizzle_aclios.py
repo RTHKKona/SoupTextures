@@ -43,8 +43,10 @@ class BytesDeswizzle:
             tile_width = 64 // bytes_per_block * block_width
             tile_height = 8 * block_height * (2 ** swizzle_mode)
             self.deswizzle_data_list = [(2,0),(2,1),(4,0),(2,1),(2**swizzle_mode,0)]
-            self.read_size = 16
-            self.read_per_tile_count = 32 * (2 ** swizzle_mode)
+            ### --- FIXED --- ###
+            # The read size depends on the format's bytes per block, it's not always 16.
+            self.read_size = bytes_per_block 
+            self.read_per_tile_count = tile_datasize // self.read_size
 
         else:
             raise UnsupportedPlatform(f'Error: unknown platform. Supported platforms: {supported_platforms}')
@@ -124,7 +126,9 @@ class BytesSwizzle:
             tile_height = 8 * block_height * (2 ** swizzle_mode)
             self.swizzle_data_list = [(2 ** swizzle_mode,0),(2,1),(4,0),(2,1),(2,0)]
             self.read_size = bytes_per_block
-            self.column_count = (bytes_per_block * im_width) // (block_width * 16) # Specific for NSW byte layout
+            ### --- FIXED --- ###
+            # The original formula was incorrect for some formats. This is the correct way.
+            self.column_count = im_width // block_width
 
         elif platform == 'ps4':
             # PlayStation 4 specific tile calculation.

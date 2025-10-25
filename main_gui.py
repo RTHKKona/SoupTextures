@@ -7,7 +7,7 @@ from tkinter import ttk, filedialog, messagebox
 from PIL import Image, ImageTk, UnidentifiedImageError
 import os
 import platform
-from typing import Optional
+from typing import Optional, Callable
 
 import constants as C
 import tex_handler
@@ -15,7 +15,48 @@ import image_utils
 
 import sys
 import argparse # For more robust CLI argument parsing
-# winreg will be imported conditionally later for Windows-specific functions
+
+
+def _get_default_tex_header_info() -> tex_handler.TexFile:
+    # Creates a TexFile object with default MHGU header information for new exports.
+    default_tex_info = tex_handler.TexFile()
+    default_tex_info.version = C.MHGU_VERSION
+    default_tex_info.magic = C.MAGIC_TEX_LITTLE 
+    default_tex_info.is_big_endian = False 
+    default_tex_info.k_unk1 = 8 
+    default_tex_info.k_unused1 = 0
+    default_tex_info.alpha_flags = 2
+    default_tex_info.k_unk2 = 0
+    default_tex_info.k_unk3 = 0
+    return default_tex_info
+
+def _pad_image_for_export(image: Image.Image, format_id: int, logger: Callable[[str], None] = print) -> Optional[Image.Image]:
+    # Pads the image dimensions to meet Aclios swizzler requirements for the target format.
+    try:
+        aclios_block_wh, aclios_bytes_per_block = tex_handler.get_aclios_format_params(format_id)
+        aclios_swizzle_mode = 4
+        print("aclios_swizzle_mode = 4")
+
+        tile_width_pixels = (64 // aclios_bytes_per_block) * aclios_block_wh[0]
+        tile_height_pixels = 8 * aclios_block_wh[1] * (2 ** aclios_swizzle_mode)
+
+        original_width, original_height = image.width, image.height
+        padded_width = ((original_width + tile_width_pixels - 1) // tile_width_pixels) * tile_width_pixels
+        padded_height = ((original_height + tile_height_pixels - 1) // tile_height_pixels) * tile_height_pixels
+
+        if original_width != padded_width or original_height != padded_height:
+            logger(f"  Padding image from {original_width}x{original_height} to {padded_width}x{padded_height} for export.")
+            padded_image = Image.new("RGBA", (padded_width, padded_height), (0, 0, 0, 0))
+            padded_image.paste(image, (0, 0))
+            return padded_image
+        return image
+            
+    except ValueError as ve:
+        logger(f"Error: Format {format_id} not supported for Aclios padding: {ve}")
+        return None
+    except Exception as e:
+        logger(f"Error during padding calculation: {e}")
+        return None
 
 class TexToolApp:
     def __init__(self, root):
@@ -239,6 +280,16 @@ class TexToolApp:
         self.zoom_out_button.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(1,0))
         
         ttk.Separator(controls_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=3, padx=1)
+
+        ### --- ADDED --- ###
+        # Batch Conversion Buttons
+        ttk.Label(controls_frame, text="Batch Conversion:", style="Header.TLabel").pack(fill=tk.X, pady=(5,1), padx=1)
+        self.batch_tex_to_png_button = ttk.Button(controls_frame, text="Batch Convert TEX -> PNG", command=self.batch_convert_tex_to_png)
+        self.batch_tex_to_png_button.pack(fill=tk.X, pady=2, padx=1)
+        self.batch_png_to_tex_button = ttk.Button(controls_frame, text="Batch Convert PNG -> TEX", command=self.batch_convert_png_to_tex)
+        self.batch_png_to_tex_button.pack(fill=tk.X, pady=2, padx=1)
+        ttk.Separator(controls_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=3, padx=1)
+        ### --- END ADDED --- ###
 
         # Image Display Canvas
         display_frame.rowconfigure(0, weight=1)
@@ -464,55 +515,6 @@ class TexToolApp:
             self.set_status(f"Error exporting PNG: {e}", C.STATUS_ERROR_FG)
             self.add_info(f"  PNG Export Exception: {e}")
 
-    def _get_default_tex_header_info(self) -> tex_handler.TexFile:
-        # Creates a TexFile object with default MHGU header information for new exports.
-        # This ensures consistency with game expectations for newly created TEX files.
-        default_tex_info = tex_handler.TexFile()
-        default_tex_info.version = C.MHGU_VERSION
-        default_tex_info.magic = C.MAGIC_TEX_LITTLE # Match desired header sequence (TEX\0)
-        default_tex_info.is_big_endian = False # Required for Little Endian magic
-        default_tex_info.k_unk1 = 8 # Specific value from desired header sequence
-        default_tex_info.k_unused1 = 0
-        default_tex_info.alpha_flags = 2 # Specific value from desired header sequence
-        default_tex_info.k_unk2 = 0
-        default_tex_info.k_unk3 = 0
-        return default_tex_info
-
-    def _pad_image_for_export(self, image: Image.Image, format_id: int) -> Optional[Image.Image]:
-        # Pads the image dimensions to meet Aclios swizzler requirements for the target format.
-        # Returns the padded image or None if parameters are invalid.
-        try:
-            aclios_block_wh, aclios_bytes_per_block = tex_handler.get_aclios_format_params(format_id)
-            aclios_swizzle_mode = 4 # Confirmed as the correct mode for MHGU TEX
-
-            tile_width_pixels = (64 // aclios_bytes_per_block) * aclios_block_wh[0]
-            tile_height_pixels = 8 * aclios_block_wh[1] * (2 ** aclios_swizzle_mode)
-
-            original_width = image.width
-            original_height = image.height
-
-            # Calculate the required padded dimensions using ceiling division.
-            padded_width = ((original_width + tile_width_pixels - 1) // tile_width_pixels) * tile_width_pixels
-            padded_height = ((original_height + tile_height_pixels - 1) // tile_height_pixels) * tile_height_pixels
-
-            if original_width != padded_width or original_height != padded_height:
-                self.add_info(f"  Padding image from {original_width}x{original_height} to {padded_width}x{padded_height} for export.")
-                # Create a new image with padded dimensions, filled with transparent black.
-                padded_image = Image.new("RGBA", (padded_width, padded_height), (0, 0, 0, 0))
-                # Paste the original image onto the top-left corner of the padded image.
-                padded_image.paste(image, (0, 0))
-                return padded_image
-            return image # No padding needed
-            
-        except ValueError as ve:
-            self.set_status(f"Error: Format {format_id} not supported for Aclios padding: {ve}", C.STATUS_ERROR_FG)
-            self.add_info("  Export aborted due to unsupported Aclios format parameters.")
-            return None
-        except Exception as e:
-            self.set_status(f"Error during padding calculation: {e}", C.STATUS_ERROR_FG)
-            self.add_info(f"  Padding Exception: {e}")
-            return None
-
     def export_to_tex(self):
         # Exports the current image data as a MHGU .tex file.
         current_image_for_export = self.current_display_image
@@ -521,7 +523,7 @@ class TexToolApp:
             messagebox.showerror("Export Error", "No image data to export.")
             return
 
-        base_tex_for_header_info = self.current_tex_file if self.current_tex_file else self._get_default_tex_header_info()
+        base_tex_for_header_info = self.current_tex_file if self.current_tex_file else _get_default_tex_header_info()
         
         # Ensure the version is explicitly MHGU_VERSION for consistency with Kuriimu2.
         base_tex_for_header_info.version = C.MHGU_VERSION 
@@ -533,8 +535,10 @@ class TexToolApp:
             self.set_status(f"Error: Unsupported export format '{export_format_str}' for MHGU.", C.STATUS_ERROR_FG)
             self.add_info(f"  Export aborted due to unsupported format: {export_format_str}")
             return
-
-        image_to_save = self._pad_image_for_export(current_image_for_export, new_tex_format_id)
+        
+        ### --- MODIFIED --- ###
+        # Pass self.add_info as the logger function to the refactored helper
+        image_to_save = _pad_image_for_export(current_image_for_export, new_tex_format_id, logger=self.add_info)
         if image_to_save is None: # Padding failed
             return
 
@@ -572,6 +576,130 @@ class TexToolApp:
         except Exception as e:
             self.set_status(f"Error during export: {e}", C.STATUS_ERROR_FG)
             self.add_info(f"  Export Exception: {e}")
+
+    def batch_convert_tex_to_png(self):
+        """Recursively converts .tex files from an input directory to .png in an output directory."""
+        input_dir = filedialog.askdirectory(title="Select Input Directory with .TEX files")
+        if not input_dir: return
+
+        output_dir = filedialog.askdirectory(title="Select Output Directory for .PNG files")
+        if not output_dir: return
+        
+        self.add_info(f"Starting batch TEX -> PNG conversion...")
+        self.add_info(f"  Input: {input_dir}")
+        self.add_info(f"  Output: {output_dir}")
+        self.set_status("Batch converting...", C.STATUS_INFO_FG)
+        self.root.update_idletasks()
+
+        success_count, fail_count = 0, 0
+        
+        for root, _, files in os.walk(input_dir):
+            for filename in files:
+                if not filename.lower().endswith('.tex'):
+                    continue
+
+                input_path = os.path.join(root, filename)
+                relative_path = os.path.relpath(input_path, input_dir)
+                output_path_no_ext = os.path.join(output_dir, os.path.splitext(relative_path)[0])
+                output_path = output_path_no_ext + '.png'
+
+                try:
+                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                    
+                    with open(input_path, "rb") as f:
+                        data = f.read()
+                    
+                    loaded_tex = tex_handler.load_tex_from_data(data)
+                    
+                    if loaded_tex and loaded_tex.image:
+                        loaded_tex.image.save(output_path, "PNG")
+                        self.add_info(f"  SUCCESS: Converted {relative_path}")
+                        success_count += 1
+                    else:
+                        self.add_info(f"  FAIL: Could not decode {relative_path}")
+                        fail_count += 1
+                except Exception as e:
+                    self.add_info(f"  ERROR: Exception on {relative_path}: {e}")
+                    fail_count += 1
+                self.root.update_idletasks() # Keep UI responsive
+
+        summary_msg = f"Batch conversion finished. {success_count} succeeded, {fail_count} failed."
+        self.add_info(summary_msg)
+        self.set_status("Batch conversion finished.", C.STATUS_SUCCESS_FG)
+        messagebox.showinfo("Batch Conversion Complete", summary_msg)
+
+    def batch_convert_png_to_tex(self):
+        """Recursively converts image files from an input directory to .tex in an output directory."""
+        input_dir = filedialog.askdirectory(title="Select Input Directory with Image files")
+        if not input_dir: return
+
+        output_dir = filedialog.askdirectory(title="Select Output Directory for .TEX files")
+        if not output_dir: return
+
+        export_format_str = self.export_format_var.get()
+        self.add_info(f"Starting batch PNG -> TEX conversion (Format: {export_format_str})...")
+        self.add_info(f"  Input: {input_dir}")
+        self.add_info(f"  Output: {output_dir}")
+        self.set_status(f"Batch converting to {export_format_str}...", C.STATUS_INFO_FG)
+        self.root.update_idletasks()
+
+        success_count, fail_count = 0, 0
+        allowed_exts = ('.png', '.jpg', '.jpeg', '.dds')
+
+        new_tex_format_id = tex_handler.get_mtf_format_id_from_string_kukkii_switch(export_format_str)
+        if new_tex_format_id is None:
+            self.add_info(f"FATAL: Invalid export format selected: {export_format_str}")
+            self.set_status("Invalid format for batch convert.", C.STATUS_ERROR_FG)
+            return
+
+        for root, _, files in os.walk(input_dir):
+            for filename in files:
+                if not filename.lower().endswith(allowed_exts):
+                    continue
+
+                input_path = os.path.join(root, filename)
+                relative_path = os.path.relpath(input_path, input_dir)
+                output_path_no_ext = os.path.join(output_dir, os.path.splitext(relative_path)[0])
+                output_path = output_path_no_ext + '.tex'
+
+                try:
+                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                    
+                    pil_image = image_utils.load_image_from_path(input_path)
+                    if not pil_image:
+                        self.add_info(f"  FAIL: Could not load image {relative_path}")
+                        fail_count += 1
+                        continue
+
+                    padded_image = _pad_image_for_export(pil_image, new_tex_format_id, logger=self.add_info)
+                    if not padded_image:
+                        self.add_info(f"  FAIL: Could not pad image {relative_path}")
+                        fail_count += 1
+                        continue
+                    
+                    base_tex_header = _get_default_tex_header_info()
+                    base_tex_header.width = padded_image.width
+                    base_tex_header.height = padded_image.height
+
+                    tex_data = tex_handler.save_tex_to_data(base_tex_header, padded_image, export_format_str)
+
+                    if tex_data:
+                        with open(output_path, "wb") as f:
+                            f.write(tex_data)
+                        self.add_info(f"  SUCCESS: Converted {relative_path}")
+                        success_count += 1
+                    else:
+                        self.add_info(f"  FAIL: Could not encode {relative_path} to TEX")
+                        fail_count += 1
+                except Exception as e:
+                    self.add_info(f"  ERROR: Exception on {relative_path}: {e}")
+                    fail_count += 1
+                self.root.update_idletasks()
+
+        summary_msg = f"Batch conversion finished. {success_count} succeeded, {fail_count} failed."
+        self.add_info(summary_msg)
+        self.set_status("Batch conversion finished.", C.STATUS_SUCCESS_FG)
+        messagebox.showinfo("Batch Conversion Complete", summary_msg)
 
     def check_tex_validity(self):
         # Placeholder method for checking TEX file validity (requires tex_handler.check_tex_type)
@@ -649,6 +777,108 @@ def headless_convert_tex_to_png(input_tex_path: str, output_png_path: Optional[s
         print(f"ERROR: An unexpected error occurred during conversion of '{input_tex_path}': {e}")
         # import traceback # For detailed debugging: traceback.print_exc()
         return 1
+
+
+def headless_batch_tex_to_png(input_dir: str, output_dir: str):
+    """Headless recursive conversion of .tex to .png."""
+    print(f"Starting batch TEX -> PNG conversion...")
+    print(f"  Input: {input_dir}")
+    print(f"  Output: {output_dir}")
+    success_count, fail_count, found_count = 0, 0, 0
+
+    for root, _, files in os.walk(input_dir):
+        for filename in files:
+            if not filename.lower().endswith('.tex'):
+                continue
+            
+            found_count += 1
+            input_path = os.path.join(root, filename)
+            relative_path = os.path.relpath(input_path, input_dir)
+            output_path_no_ext = os.path.join(output_dir, os.path.splitext(relative_path)[0])
+            output_path = output_path_no_ext + '.png'
+
+            try:
+                os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                with open(input_path, "rb") as f: data = f.read()
+                loaded_tex = tex_handler.load_tex_from_data(data)
+                if loaded_tex and loaded_tex.image:
+                    loaded_tex.image.save(output_path, "PNG")
+                    print(f"  SUCCESS: {relative_path}")
+                    success_count += 1
+                else:
+                    print(f"  FAIL: Could not decode {relative_path}")
+                    fail_count += 1
+            except Exception as e:
+                print(f"  ERROR: Exception on {relative_path}: {e}")
+                fail_count += 1
+    
+    print("-" * 20)
+    print("Batch conversion finished.")
+    print(f"  Files found: {found_count}")
+    print(f"  Succeeded:   {success_count}")
+    print(f"  Failed:      {fail_count}")
+    return 0 if fail_count == 0 and found_count > 0 else 1
+
+def headless_batch_png_to_tex(input_dir: str, output_dir: str, export_format_str: str):
+    """Headless recursive conversion of images to .tex."""
+    print(f"Starting batch PNG -> TEX conversion (Format: {export_format_str})...")
+    print(f"  Input: {input_dir}")
+    print(f"  Output: {output_dir}")
+    success_count, fail_count, found_count = 0, 0, 0
+    allowed_exts = ('.png', '.jpg', '.jpeg', '.dds')
+
+    new_tex_format_id = tex_handler.get_mtf_format_id_from_string_kukkii_switch(export_format_str)
+    if new_tex_format_id is None:
+        print(f"FATAL: Invalid export format specified: {export_format_str}")
+        return 1
+
+    for root, _, files in os.walk(input_dir):
+        for filename in files:
+            if not filename.lower().endswith(allowed_exts):
+                continue
+            
+            found_count += 1
+            input_path = os.path.join(root, filename)
+            relative_path = os.path.relpath(input_path, input_dir)
+            output_path_no_ext = os.path.join(output_dir, os.path.splitext(relative_path)[0])
+            output_path = output_path_no_ext + '.tex'
+
+            try:
+                os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                pil_image = image_utils.load_image_from_path(input_path)
+                if not pil_image:
+                    print(f"  FAIL: Could not load image {relative_path}")
+                    fail_count += 1
+                    continue
+
+                padded_image = _pad_image_for_export(pil_image, new_tex_format_id, logger=print)
+                if not padded_image:
+                    print(f"  FAIL: Could not pad image {relative_path}")
+                    fail_count += 1
+                    continue
+
+                base_tex_header = _get_default_tex_header_info()
+                base_tex_header.width = padded_image.width
+                base_tex_header.height = padded_image.height
+                tex_data = tex_handler.save_tex_to_data(base_tex_header, padded_image, export_format_str)
+
+                if tex_data:
+                    with open(output_path, "wb") as f: f.write(tex_data)
+                    print(f"  SUCCESS: {relative_path}")
+                    success_count += 1
+                else:
+                    print(f"  FAIL: Could not encode {relative_path} to TEX")
+                    fail_count += 1
+            except Exception as e:
+                print(f"  ERROR: Exception on {relative_path}: {e}")
+                fail_count += 1
+
+    print("-" * 20)
+    print("Batch conversion finished.")
+    print(f"  Files found: {found_count}")
+    print(f"  Succeeded:   {success_count}")
+    print(f"  Failed:      {fail_count}")
+    return 0 if fail_count == 0 and found_count > 0 else 1
 
 # === REGISTRY AND CLI HANDLING (Windows-specific) ===
 PROG_ID = "SoupTextures.MHGUTexFile.1"
@@ -836,10 +1066,18 @@ if __name__ == "__main__":
     reg_group.add_argument("--register-context-menu", action="store_true", help="Register 'Convert to .PNG' context menu for .tex files.")
     reg_group.add_argument("--unregister-context-menu", action="store_true", help="Unregister 'Convert to .PNG' context menu.")
     
-    convert_group = parser.add_argument_group('Headless Conversion')
+    ### --- MODIFIED --- ###
+    convert_group = parser.add_argument_group('Headless Single-File Conversion')
     convert_group.add_argument("--convert-to-png", metavar="INPUT_TEX", help="Convert specified .tex file to .png headlessly.")
     convert_group.add_argument("--output-png", metavar="OUTPUT_PNG", help="Optional output path for .png conversion (default: input_file.png).")
-    
+
+    batch_group = parser.add_argument_group('Headless Batch Conversion')
+    batch_group.add_argument("--batch-tex-to-png", metavar="INPUT_DIR", help="Recursively convert .tex files in a directory to .png.")
+    batch_group.add_argument("--batch-png-to-tex", metavar="INPUT_DIR", help="Recursively convert image files (.png, .jpg, .dds) in a directory to .tex.")
+    batch_group.add_argument("--output-dir", metavar="OUTPUT_DIR", help="Output directory for batch operations (required for batch).")
+    batch_group.add_argument("--format", default="DXT5", help="Target .tex format for png->tex conversion (e.g., DXT1, DXT5, BGRA8888). Default: DXT5.")
+    ### --- END MODIFIED --- ###
+
     # For GUI: A single optional positional argument for the file to open.
     parser.add_argument("gui_file", nargs='?', default=None, help="Path to a .tex file to open in the GUI (optional).")
 
@@ -863,13 +1101,33 @@ if __name__ == "__main__":
             cli_action_taken = True
             sys.exit(0)
 
-    if args.convert_to_png:
+    # Check for texconv dependency for any conversion task
+    if args.convert_to_png or args.batch_tex_to_png or args.batch_png_to_tex:
         if not image_utils.check_texconv():
              print(f"WARNING: texconv.exe (expected at '{os.path.abspath(image_utils.TEXCONV_PATH)}') "
-                   "not found. DXT/BCn features may fail during headless conversion.")
+                   "not found. DXT/BCn features will fail during headless conversion.")
+
+    if args.convert_to_png:
         exit_code = headless_convert_tex_to_png(args.convert_to_png, args.output_png)
         cli_action_taken = True
         sys.exit(exit_code)
+    
+    ### --- ADDED --- ###
+    if args.batch_tex_to_png:
+        if not args.output_dir:
+            parser.error("--output-dir is required for batch operations.")
+        exit_code = headless_batch_tex_to_png(args.batch_tex_to_png, args.output_dir)
+        cli_action_taken = True
+        sys.exit(exit_code)
+
+    if args.batch_png_to_tex:
+        if not args.output_dir:
+            parser.error("--output-dir is required for batch operations.")
+        exit_code = headless_batch_png_to_tex(args.batch_png_to_tex, args.output_dir, args.format)
+        cli_action_taken = True
+        sys.exit(exit_code)
+    ### --- END ADDED --- ###
+
 
     # If no CLI action was taken, proceed to GUI launch.
     if not cli_action_taken:
